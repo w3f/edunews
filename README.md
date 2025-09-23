@@ -12,6 +12,8 @@ EduNews is an educational prototype that illustrates a potential solution for ve
 - **AssetHub**: Creates NFT representations of verified articles for ownership proof
 - **PeopleHub**: Verifies publisher identities to establish trust
 
+> To launch, local instance of EduChain and AssetHub, you can use this one-command deployment to run it locally: [Local EduChain Deployment.](https://github.com/w3f/educhain?tab=readme-ov-file#local-development-chain)
+
 This experimental approach demonstrates how developers can learn to build cross-chain applications that maintain a seamless user experience while benefiting from specialized chain functionality.
 
 ## 🎓 Educational Purpose
@@ -73,7 +75,6 @@ flowchart TD
 - **UI Components**: PrimeVue with Toast notifications and responsive design
 - **Blockchain SDK**: Polkadot API (PAPI) for type-safe chain interactions
 - **Wallet Integration**: @talismn/connect-wallets for multi-wallet support
-- **Used** 
 
 ## 🚀 Getting Started
 
