@@ -82,6 +82,7 @@ flowchart TD
 ### Prerequisites
 - Node.js v18+ and npm
 - A Polkadot wallet extension (Polkadot.js, SubWallet, or Talisman)
+- [Locally running EduChain instance](https://github.com/w3f/educhain?tab=readme-ov-file#local-development-chain)
 
 ### Installation
 ```bash
@@ -94,7 +95,11 @@ npm install
 
 # Generate PAPI chain descriptors
 npm run postinstall
+```
 
+Before running the development server, ensure you are running a local instance of EduChain,[ which you can do here.](https://github.com/w3f/educhain?tab=readme-ov-file#local-development-chain)
+
+```sh
 # Start development server
 npm run dev
 ```
