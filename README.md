@@ -88,8 +88,8 @@ flowchart TD
 ### Installation
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/polkadot-news.git
-cd polkadot-news
+git clone https://github.com/w3f/edunews
+cd edunews
 
 # Install dependencies
 npm install
