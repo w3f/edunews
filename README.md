@@ -2,6 +2,8 @@
 
 > **📚 EDUCATIONAL PROJECT**: This is a learning-focused implementation created to explore Polkadot's multi-chain ecosystem. It is not intended for production use and serves primarily as an educational resource.
 
+![EduNews stack example](./md-img/educhain.png)
+
 A **Vue 3 + TypeScript** application that demonstrates how blockchain technology could potentially fight misinformation by creating an immutable, verifiable record of news articles using Polkadot's multi-chain ecosystem.
 
 ## 📰 Project Overview
