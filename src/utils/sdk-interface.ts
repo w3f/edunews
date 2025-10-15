@@ -164,85 +164,6 @@ export function createSetCollectionMetadataTx(assetApi: TypedApi<Pas_asset_hub>,
   })
 }
 
-// Create a new collection for a publisher if none exists
-export async function createPublisherCollection(publisherAddress: string): Promise<number> {
-  const unified = unifyAddress(publisherAddress)
-  console.log("Creating NFT collection for:", unified)
-  const assetApi = sdk('pas_asset_hub').api
-  const signer = await polkadotSigner()
-  if (!signer) throw new Error('No signer found')
-
-  try {
-    // Get the next collection ID directly from the chain
-    let collectionId = await assetApi.query.Nfts.NextCollectionId.getValue();
-    if (collectionId === undefined) {
-      collectionId = 0;
-    }
-    console.log(`Next collection ID will be: ${collectionId}`);
-
-    // Create the collection transaction
-    const createTx = assetApi.tx.Nfts.create({
-      admin: MultiAddress.Id(unified),
-      config: {
-        settings: BigInt(0),
-        mint_settings: {
-          mint_type: { type: "Public", value: undefined },
-          default_item_settings: BigInt(0),
-          price: undefined,
-          start_block: undefined,
-          end_block: undefined
-        },
-        max_supply: undefined
-      },
-    });
-
-    // Create the metadata transaction
-    const metadataTx = assetApi.tx.Nfts.set_collection_metadata({
-      collection: collectionId,
-      data: Binary.fromText('news')
-    });
-
-    // Batch the two transactions together
-    const batchTx = assetApi.tx.Utility.batch({
-      calls: [createTx.decodedCall, metadataTx.decodedCall]
-    });
-
-    // Return a Promise that resolves when the transaction is finalized
-    return new Promise((resolve, reject) => {
-      batchTx.signSubmitAndWatch(signer).subscribe({
-        next(event) {
-          if (event.type === 'finalized') {
-            console.log(`Collection ${collectionId} created and metadata set successfully`);
-            resolve(collectionId);
-          }
-        },
-        error(e) {
-          console.error('Error creating collection:', e);
-          reject(e);
-        }
-      });
-    });
-  } catch (error) {
-    console.error('Error in createPublisherCollection:', error);
-    throw error;
-  }
-}
-
-// Get or create a publisher collection for an address
-export async function getOrCreatePublisherCollection(address: string): Promise<number> {
-  const unified = unifyAddress(address)
-  console.log('Looking for collection for address:', unified)
-  const collections = await getAllNewsPublisherCollections()
-  console.log('Found collections:', collections)
-  const found = collections.find(c => c.publisher === unified)
-  console.log('Matching collection:', found)
-  if (found) return found.collectionId
-
-  // Create a new collection for this publisher
-  return await createPublisherCollection(unified)
-}
-
-
 /**
  * Legacy function: Create NFT for an already-registered article
  * 
@@ -250,10 +171,10 @@ export async function getOrCreatePublisherCollection(address: string): Promise<n
  * The recommended approach is to use recordArticleDirectlyOnEduChain which creates
  * the NFT first, then records on EduChain.
  * 
- * - Creates collection if it doesn't exist
  * - Uses the item ID from EduChain registration
  * - Mints NFT and sets metadata on AssetHub
  * - Returns success status and the item ID
+ * - Note: Collection must already exist before calling this function
  */
 export async function createNftForRegisteredArticle(
   collectionId: number,
@@ -273,19 +194,12 @@ export async function createNftForRegisteredArticle(
     const collections = await getAllNewsPublisherCollections();
     const collectionExists = collections.some(c => c.collectionId === collectionId);
 
-    // If collection doesn't exist, create it first
     if (!collectionExists) {
-      console.log(`Collection ${collectionId} doesn't exist yet, creating it now`);
-      try {
-        // Create the collection (this creates it with the expected collectionId)
-        await createPublisherCollection(unified);
-      } catch (e) {
-        console.error('Failed to create collection:', e);
-        return { success: false };
-      }
+      console.error(`Collection ${collectionId} doesn't exist. Please use recordArticleDirectlyOnEduChain for new collections.`);
+      return { success: false };
     }
 
-    // Now we can use the provided eduChainItemId directly
+    // Use the provided eduChainItemId directly
     console.log(`Creating NFT with collection ID ${collectionId}, item ID ${eduChainItemId}`);
 
     // Batch mint and set NFT metadata
@@ -320,9 +234,17 @@ export async function createNftForRegisteredArticle(
 }
 
 /**
- * Updated flow: First create NFT on AssetHub, then record on EduChain.
- * This ensures we have confirmed collection and item IDs before recording on EduChain.
- * Creates collection if needed, mints NFT, and then records article on EduChain.
+ * Updated flow: Batch all AssetHub operations, then record on EduChain.
+ * This reduces signatures from 3-4 down to 2.
+ * 
+ * Signature count:
+ * - First article (new collection): 2 signatures
+ *   1. AssetHub batch: create collection + set collection metadata + mint NFT + set NFT metadata
+ *   2. EduChain: record article
+ * 
+ * - Subsequent articles: 2 signatures
+ *   1. AssetHub batch: mint NFT + set NFT metadata
+ *   2. EduChain: record article
  */
 export async function recordArticleDirectlyOnEduChain(
   title: string,
@@ -335,65 +257,89 @@ export async function recordArticleDirectlyOnEduChain(
 ): Promise<{ collectionId: number, itemId: number, nftCreated: boolean }> {
   const unified = unifyAddress(publisherAddress);
   console.log(`Starting article verification process for publisher: ${unified}`);
-  console.log(`Step 1: Creating NFT on AssetHub first to ensure confirmed IDs`);
 
   // Check if publisher already has a collection
   const collections = await getAllNewsPublisherCollections();
   const existingCollection = collections.find(c => c.publisher === unified);
-
-  // Step 1A: Handle collection creation if needed
-  let collectionId: number;
-  if (existingCollection) {
-    collectionId = existingCollection.collectionId;
-    console.log(`Using existing collection ID: ${collectionId}`);
-  } else {
-    console.log(`No existing collection found. Creating new collection...`);
-    try {
-      collectionId = await createPublisherCollection(unified);
-      console.log(`Created new collection with ID: ${collectionId}`);
-    } catch (error) {
-      console.error(`Failed to create new collection: ${error}`);
-      throw new Error(`Failed to create NFT collection: ${error}`);
-    }
-  }
-
-  // Step 1B: Determine item ID and mint NFT
-  const itemId = await getNextItemId(collectionId);
-  console.log(`Using item ID: ${itemId} for new NFT`);
 
   const assetApi = sdk('pas_asset_hub').api;
   const eduChainApi = sdk('educhain').api;
   const signer = await polkadotSigner();
   if (!signer) throw new Error('No signer found');
 
+  let collectionId: number;
+  let itemId: number;
+
   try {
-    console.log(`Step 2: Minting NFT with collection ID ${collectionId}, item ID ${itemId}`);
+    if (existingCollection) {
+      // Path 1: Existing collection - batch mint + metadata (2 total signatures)
+      collectionId = existingCollection.collectionId;
+      itemId = await getNextItemId(collectionId);
+      console.log(`Using existing collection ${collectionId}, minting item ${itemId}`);
 
-    // Create and mint NFT
-    const mintTx = createMintNftTx(assetApi, collectionId, itemId, unified);
-    const itemMetadataTx = createSetMetadataTx(assetApi, collectionId, itemId, contentHash);
-    const batchCalls = [mintTx.decodedCall, itemMetadataTx.decodedCall];
-    const batchTx = assetApi.tx.Utility.batch({ calls: batchCalls });
-
-    // Wait for NFT creation to finalize
-    await new Promise<void>((resolve, reject) => {
-      batchTx.signSubmitAndWatch(signer).subscribe({
-        next(event) {
-          if (event.type === 'finalized') {
-            console.log(`NFT created successfully with collection ID ${collectionId}, item ID ${itemId}`);
-            resolve();
-          }
-        },
-        error(e) {
-          console.error('Error creating NFT:', e);
-          reject(e);
-        }
+      // Batch: mint NFT + set NFT metadata
+      const mintTx = createMintNftTx(assetApi, collectionId, itemId, unified);
+      const itemMetadataTx = createSetMetadataTx(assetApi, collectionId, itemId, contentHash);
+      const batchTx = assetApi.tx.Utility.batch_all({
+        calls: [mintTx.decodedCall, itemMetadataTx.decodedCall]
       });
-    });
 
-    // Step 3: Record article on EduChain with confirmed collection and item IDs
-    console.log(`Step 3: Recording article on EduChain with confirmed collection ID ${collectionId}, item ID ${itemId}`);
+      console.log(`Step 1: Batching mint + metadata on AssetHub (1 signature)`);
+      await new Promise<void>((resolve, reject) => {
+        batchTx.signSubmitAndWatch(signer).subscribe({
+          next(event) {
+            if (event.type === 'finalized') {
+              console.log(`✓ NFT minted and metadata set: collection ${collectionId}, item ${itemId}`);
+              resolve();
+            }
+          },
+          error(e) {
+            console.error('Error in batched NFT creation:', e);
+            reject(e);
+          }
+        });
+      });
 
+    } else {
+      // Path 2: New collection - batch all 4 operations (2 total signatures)
+      collectionId = await assetApi.query.Nfts.NextCollectionId.getValue() || 0;
+      itemId = 1; // First item in new collection
+      console.log(`Creating new collection ${collectionId} with first item ${itemId}`);
+
+      // Batch: create collection + set collection metadata + mint NFT + set NFT metadata
+      const createTx = createCollectionTx(assetApi, unified);
+      const collectionMetadataTx = createSetCollectionMetadataTx(assetApi, collectionId);
+      const mintTx = createMintNftTx(assetApi, collectionId, itemId, unified);
+      const itemMetadataTx = createSetMetadataTx(assetApi, collectionId, itemId, contentHash);
+
+      const batchTx = assetApi.tx.Utility.batch_all({
+        calls: [
+          createTx.decodedCall,
+          collectionMetadataTx.decodedCall,
+          mintTx.decodedCall,
+          itemMetadataTx.decodedCall
+        ]
+      });
+
+      console.log(`Step 1: Batching collection creation + metadata + mint + item metadata (1 signature)`);
+      await new Promise<void>((resolve, reject) => {
+        batchTx.signSubmitAndWatch(signer).subscribe({
+          next(event) {
+            if (event.type === 'finalized') {
+              console.log(`✓ Collection created and NFT minted: collection ${collectionId}, item ${itemId}`);
+              resolve();
+            }
+          },
+          error(e) {
+            console.error('Error in batched collection + NFT creation:', e);
+            reject(e);
+          }
+        });
+      });
+    }
+
+    // Step 2: Record article on EduChain (second signature)
+    console.log(`Step 2: Recording article on EduChain (1 signature)`);
     const tx = eduChainApi.tx.News.record_article({
       collection_id: BigInt(collectionId),
       item_id: BigInt(itemId),
@@ -405,12 +351,12 @@ export async function recordArticleDirectlyOnEduChain(
       canonical_url: Binary.fromText(canonicalUrl),
     });
 
-    // Return a Promise that resolves when the transaction is finalized
     return new Promise((resolve, reject) => {
       tx.signSubmitAndWatch(signer).subscribe({
         next(event) {
           if (event.type === 'finalized') {
-            console.log(`Article successfully recorded on EduChain with collection ID ${collectionId}, item ID ${itemId}`);
+            console.log(`✓ Article recorded on EduChain: collection ${collectionId}, item ${itemId}`);
+            console.log(`🎉 Complete! Total signatures: 2`);
             resolve({ collectionId, itemId, nftCreated: true });
           }
         },
