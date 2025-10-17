@@ -1,41 +1,44 @@
 <script setup lang="ts">
-import { defineProps, defineEmits, computed, ref, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { getIdentityFromAddress, checkNftExists } from '../utils/sdk-interface'
 import ArticleBadge from './ArticleBadge.vue'
 import type { ArticleRecord } from '../types'
 
-import DataTable from 'primevue/datatable'
-import Column from 'primevue/column'
+import Card from 'primevue/card'
+import Divider from 'primevue/divider'
+
+interface IdentityStatus {
+    display: string
+    verified: boolean
+}
 
 const props = defineProps<{ articles: ArticleRecord[] }>()
-const emit = defineEmits(['register-nft'])
 
-const publisherIdentities = ref<Record<string, string>>({})
-const nftStatus = ref<Record<string, boolean>>({}) // Track NFT existence by hash:boolean
-
-const groupedByPublisher = computed(() => {
-    const map: Record<string, ArticleRecord[]> = {}
-    for (const article of props.articles) {
-        const pub = article.publisher || 'Unknown'
-        if (!map[pub]) map[pub] = []
-        map[pub].push(article)
-    }
-    return map
-})
+const publisherIdentities = ref<Record<string, IdentityStatus>>({})
+const nftStatus = ref<Record<string, boolean>>({})
 
 onMounted(async () => {
+    // Get unique publisher addresses
+    const publishers = [...new Set(props.articles.map(article => article.publisher).filter(Boolean))]
+
     // Get publisher identities
-    const pubs = Object.keys(groupedByPublisher.value)
-    for (const pub of pubs) {
-        const identity = await getIdentityFromAddress(pub)
-        publisherIdentities.value[pub] = identity && identity.display ? identity.display : pub
+    for (const publisher of publishers) {
+        const identity = await getIdentityFromAddress(publisher)
+        publisherIdentities.value[publisher] =
+            identity?.display ?
+                { display: identity?.display, verified: true } :
+                { display: publisher.substring(0, 6) + '...' + publisher.substring(publisher.length - 4), verified: false }
     }
 
     // Check NFT existence for each article
     for (const article of props.articles) {
-        const nftKey = article.content_hash
-        nftStatus.value[nftKey] = await checkNftExists(article.collection_id, article.item_id, nftKey)
-        console.log('NFT status for', nftKey, 'is', nftStatus.value[nftKey])
+        if (article.content_hash) {
+            nftStatus.value[article.content_hash] = await checkNftExists(
+                article.collection_id,
+                article.item_id,
+                article.content_hash
+            )
+        }
     }
 })
 
@@ -43,104 +46,91 @@ onMounted(async () => {
 </script>
 
 <template>
-    <div>
-        <div v-for="(group, publisher) in groupedByPublisher" :key="publisher" class="mb-8">
-            <h2 class="text-xl font-bold mb-2">
-                {{ publisherIdentities[publisher] || publisher }}
-                <ArticleBadge v-if="publisherIdentities[publisher] && publisherIdentities[publisher] !== publisher"
-                    type="verified" class="ml-2">Verified Identity</ArticleBadge>
-                <ArticleBadge v-else type="unverified" class="ml-2">Unverified Identity</ArticleBadge>
-            </h2>
-            <DataTable :value="group">
-                <Column header="NFT Status">
-                    <template #body="slotProps">
-                        <div class="flex flex-col gap-1">
-                            <div v-if="nftStatus[`${slotProps.data.content_hash}`]">
-                                <ArticleBadge type="verified" class="mt-1">
-                                    Registered
-                                </ArticleBadge>
-                            </div>
-                            <div v-else class="flex flex-col items-start gap-2">
-                                <ArticleBadge type="unverified" class="mt-1">
-                                    Unregistered
-                                </ArticleBadge>
-                            </div>
-                        </div>
-                    </template>
-                </Column>
-                <Column header="Status">
-                    <template #body="slotProps">
-                        <div class="flex flex-col gap-1">
-                            <ArticleBadge v-if="slotProps.data.content_hash" type="verified">Verified</ArticleBadge>
-                            <ArticleBadge v-else type="unverified">No Metadata</ArticleBadge>
-                        </div>
-                    </template>
-                </Column>
-                <Column field="item_id" header="Item ID">
-                    <template #body="slotProps">
-                        <span v-if="slotProps.data.content_hash">{{ slotProps.data.item_id }}</span>
-                        <ArticleBadge v-else type="unverified">No Metadata</ArticleBadge>
-                    </template>
-                </Column>
-                <Column field="collection_id" header="Collection ID">
-                    <template #body="slotProps">
-                        <span v-if="slotProps.data.content_hash">{{ slotProps.data.collection_id }}</span>
-                        <ArticleBadge v-else type="unverified">No Metadata</ArticleBadge>
-                    </template>
-                </Column>
-                <Column field="title" header="Title">
-                    <template #body="slotProps">
-                        <span v-if="slotProps.data.content_hash">{{ slotProps.data.title }}</span>
-                        <ArticleBadge v-else type="unverified">No Metadata</ArticleBadge>
-                    </template>
-                </Column>
-                <Column field="canonical_url" header="URL">
-                    <template #body="slotProps">
-                        <a v-if="slotProps.data.content_hash && slotProps.data.canonical_url"
-                            :href="slotProps.data.canonical_url" target="_blank" rel="noopener noreferrer"
-                            class="text-blue-600 underline">
-                            {{ slotProps.data.canonical_url }}
-                        </a>
-                        <ArticleBadge v-else type="unverified">No Metadata</ArticleBadge>
-                    </template>
-                </Column>
-                <Column field="content_hash" header="Content Hash">
-                    <template #body="slotProps">
-                        <span v-if="slotProps.data.content_hash">
-                            {{
-                                slotProps.data.content_hash.length > 16
-                                    ? slotProps.data.content_hash.slice(0, 4) + '...' + slotProps.data.content_hash.slice(-4)
-                                    : slotProps.data.content_hash
-                            }}
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        <Card v-for="article in articles" :key="article.content_hash || article.item_id" class="h-full">
+            <template #header>
+                <div class="p-4 pb-0">
+                    <!-- Title -->
+                    <h3 v-if="article.title" class="font-semibold text-lg leading-tight mb-3 line-clamp-2"
+                        :title="article.title">
+                        {{ article.title }}
+                    </h3>
+                    <div v-else class="mb-3">
+                        <ArticleBadge type="unverified">No Title</ArticleBadge>
+                    </div>
+
+                    <!-- Publisher Info -->
+                    <div v-if="Object.keys(publisherIdentities).length > 0" class="flex items-center gap-2 mb-3">
+                        <span class="text-sm text-gray-600">By:</span>
+                        <span class="text-sm font-medium">
+                            {{ publisherIdentities[article.publisher].display || 'Unknown' }}
                         </span>
-                        <ArticleBadge v-else type="unverified">No Metadata</ArticleBadge>
-                    </template>
-                </Column>
-                <Column field="hash_algo" header="Hash Algo">
-                    <template #body="slotProps">
-                        <span v-if="slotProps.data.content_hash">{{ slotProps.data.hash_algo }}</span>
-                        <ArticleBadge v-else type="unverified">No Metadata</ArticleBadge>
-                    </template>
-                </Column>
-                <Column field="word_count" header="Word Count">
-                    <template #body="slotProps">
-                        <span v-if="slotProps.data.content_hash">{{ slotProps.data.word_count }}</span>
-                        <ArticleBadge v-else type="unverified">No Metadata</ArticleBadge>
-                    </template>
-                </Column>
-                <Column field="last_updated_at" header="Last Updated (block)">
-                    <template #body="slotProps">
-                        <span v-if="slotProps.data.content_hash">{{ slotProps.data.last_updated_at }}</span>
-                        <ArticleBadge v-else type="unverified">No Metadata</ArticleBadge>
-                    </template>
-                </Column>
-                <Column field="updates" header="Updates">
-                    <template #body="slotProps">
-                        <span v-if="slotProps.data.content_hash">{{ slotProps.data.updates }}</span>
-                        <ArticleBadge v-else type="unverified">No Metadata</ArticleBadge>
-                    </template>
-                </Column>
-            </DataTable>
-        </div>
+                        <ArticleBadge v-if="publisherIdentities[article.publisher].verified" type="verified"
+                            class="text-xs">
+                            Verified
+                        </ArticleBadge>
+                        <ArticleBadge v-else type="unverified" class="text-xs">
+                            Unverified
+                        </ArticleBadge>
+                    </div>
+
+                    <!-- Status Badges -->
+                    <div class="flex gap-2">
+                        <ArticleBadge v-if="article.content_hash && nftStatus[article.content_hash]" type="verified">
+                            NFT Created
+                        </ArticleBadge>
+                        <ArticleBadge v-else type="unverified">
+                            No NFT
+                        </ArticleBadge>
+                        <ArticleBadge v-if="article.content_hash" type="verified">Verified</ArticleBadge>
+                        <ArticleBadge v-else type="unverified">Unverified</ArticleBadge>
+                    </div>
+                </div>
+            </template>
+
+            <template #content>
+                <div class="space-y-3">
+                    <!-- URL -->
+                    <div v-if="article.canonical_url">
+                        <a :href="article.canonical_url" target="_blank" rel="noopener noreferrer"
+                            class="text-blue-600 hover:text-blue-800 underline text-sm break-all"
+                            :title="article.canonical_url">
+                            {{ article.canonical_url.length > 40 ? article.canonical_url.substring(0, 40) + '...' :
+                                article.canonical_url }}
+                        </a>
+                    </div>
+
+                    <Divider />
+
+                    <!-- Key Info Grid -->
+                    <div class="grid grid-cols-2 gap-2 text-sm">
+                        <div>
+                            <span class="text-gray-600 block">Collection</span>
+                            <span class="font-medium">{{ article.collection_id || 'N/A' }}</span>
+                        </div>
+                        <div>
+                            <span class="text-gray-600 block">Item ID</span>
+                            <span class="font-medium">{{ article.item_id || 'N/A' }}</span>
+                        </div>
+                        <div>
+                            <span class="text-gray-600 block">Words</span>
+                            <span class="font-medium">{{ article.word_count?.toLocaleString() || 'N/A' }}</span>
+                        </div>
+                        <div>
+                            <span class="text-gray-600 block">Algorithm</span>
+                            <span class="font-medium">{{ article.hash_algo || 'N/A' }}</span>
+                        </div>
+                    </div>
+
+                    <!-- Content Hash -->
+                    <div v-if="article.content_hash">
+                        <span class="text-gray-600 text-sm block mb-1">Content Hash</span>
+                        <code class="text-xs bg-gray-100 px-2 py-1 rounded block font-mono break-all">
+                            {{ article.content_hash }}
+                        </code>
+                    </div>
+                </div>
+            </template>
+        </Card>
     </div>
 </template>
